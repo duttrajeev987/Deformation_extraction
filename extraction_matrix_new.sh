@@ -1,11 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
+# Input EPW file
 input_file="epw.out"
-bands=(6 7 8)   # <== change this list to whatever bands you need
-values=$(seq 1 9)   # <== phonon indices range
 
-# Create all combinations of band_i_to_band_j
+# List of bands to process
+bands=(9)
+
+# Phonon indices range
+values=$(seq 1 9)
+
+# Create folders for all band combinations
 for b1 in "${bands[@]}"; do
   for b2 in "${bands[@]}"; do
     mkdir -p "${b1}_to_${b2}"
@@ -14,8 +19,9 @@ done
 
 echo "Processing data from $input_file ..."
 
+# Extract data for each phonon index and band pair
 for i in $values; do
-  echo "  -> Processing value $i ..."
+  echo "  -> Processing phonon index $i ..."
   for b1 in "${bands[@]}"; do
     for b2 in "${bands[@]}"; do
       grep -E "^[[:space:]]*$b1[[:space:]]+$b2[[:space:]]+$i[[:space:]]" "$input_file" \
@@ -23,38 +29,57 @@ for i in $values; do
     done
   done
 done
-##########files for the slope of acoustical modes################
-master_file_ADP="all_slopes.txt"
-echo "band1 band2 slope_TA slope_TA2 slope_LA" > "$master_file_ADP"
 
+# Master files
 master_file_ODP="all_ODP.txt"
 echo "band1 band2 D_ODP" > "$master_file_ODP"
 
-echo "Generating plots ..."
+master_file_IVS="all_D_IVS.txt"
+echo "band1 band2 D_ODP D_IVS omega_IVS" > "$master_file_IVS"
+
+echo "Generating plots and computing deformation potentials ..."
+
+# Loop over bands
 for b1 in "${bands[@]}"; do
   for b2 in "${bands[@]}"; do
+
+    # Run Python script
     (
       cd "${b1}_to_${b2}"
       python3 ../G_to_M_conversion.py "$b1" "$b2"
     )
-     # Append slopes to master file
-       slopes=$(awk '
-        /^slope_TA: / {ta=$2} 
-        /^slope_TA2: / {ta2=$2} 
-        /^slope_LA: / {la=$2} 
-        END{print ta, ta2, la}' "${b1}_to_${b2}/slopes.txt")
-     #slopes=$(awk -F': ' '/slope_TA/ {ta=$2} /slope_TA2/ {ta2=$2} /slope_LA/ {la=$2} END{print ta, ta2, la}' "${b1}_to_${b2}/slopes.txt")
-    echo "$b1 $b2 $slopes" >> "$master_file_ADP"
-    # Append D_ODP to master file 
-       D_ODP=$(awk ' 
-        /^D_ODP_raw: / {odp=$2}
-        END{print odp}' "${b1}_to_${b2}/D_ODP_result.txt")
-    #slope_line=$(awk 'NR>1 {print $3, $4}' "${b1}_to_${b2}/slopes.txt")
-        echo "$b1 $b2 $D_ODP" >> "$master_file_ODP"
+
+    # --- Extract D_ODP ---
+    D_ODP_FILE="${b1}_to_${b2}/D_ODP_result.txt"
+    if [[ -f "$D_ODP_FILE" ]]; then
+        D_ODP=$(awk -F': ' '/^D_ODP_raw:/ {print $2}' "$D_ODP_FILE")
+    else
+        echo "Warning: $D_ODP_FILE not found"
+        D_ODP=NaN
+    fi
+
+    # Append D_ODP to master file
+    echo "$b1 $b2 $D_ODP" >> "$master_file_ODP"
+
+    # --- Extract D_IVS and mean frequency ---
+    D_IVS_FILE="${b1}_to_${b2}/D_IVS_result.txt"
+    if [[ -f "$D_IVS_FILE" ]]; then
+        D_IVS=$(awk -F': ' '/^D_IVS:/ {print $2}' "$D_IVS_FILE")
+        omega_IVS=$(awk -F': ' '/^mean_omega/ {print $NF}' "$D_IVS_FILE")
+    else
+        echo "Warning: $D_IVS_FILE not found"
+        D_IVS=NaN
+        omega_IVS=NaN
+    fi
+
+    # Append to IVS master file
+    echo "$b1 $b2 $D_ODP $D_IVS $omega_IVS" >> "$master_file_IVS"
+
   done
 done
 
-python3 final_D.py
+# Optional: run final plotting script
 python3 final_ODP.py
 
 echo "Process completed successfully!"
+
